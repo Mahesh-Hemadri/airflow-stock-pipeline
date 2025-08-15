@@ -1,0 +1,124 @@
+# docker-compose.yml 
+version: '3.8'
+
+x-common-environment: &common-environment
+  #  Airflow user credentials ---
+  # The entrypoint of the official Airflow image will automatically create
+  # this user on the first run.
+  _AIRFLOW_WWW_USER_USERNAME: admin
+  _AIRFLOW_WWW_USER_PASSWORD: admin
+  _AIRFLOW_WWW_USER_EMAIL: admin@example.com
+  _AIRFLOW_WWW_USER_FIRSTNAME: Admin
+  _AIRFLOW_WWW_USER_LASTNAME: User
+  _AIRFLOW_WWW_USER_ROLE: Admin
+
+  # Airflow Core Configuration 
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+  AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+  AIRFLOW__WEBSERVER__WORKER_CLASS: gthread
+  
+  #  SMTP Configuration for Email Alerts 
+  AIRFLOW__SMTP__SMTP_HOST: smtp.gmail.com
+  AIRFLOW__SMTP__SMTP_PORT: 587
+  AIRFLOW__SMTP__SMTP_USER: your-email@gmail.com
+  AIRFLOW__SMTP__SMTP_PASSWORD: your-16-digit-app-password
+  AIRFLOW__SMTP__SMTP_MAIL_FROM: Your Name <your-email@gmail.com>
+  AIRFLOW__SMTP__SMTP_STARTTLS: 'true'
+  AIRFLOW__SMTP__SMTP_SSL: 'false'
+
+  #  Connection & Script Variables 
+  AIRFLOW_CONN_STOCK_DB: postgresql://stockuser:stockpassword@postgres-stock-data:5432/stockdata
+  ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-YOUR_DEFAULT_API_KEY}
+  STOCK_DB_HOST: postgres-stock-data
+  STOCK_DB_PORT: 5432
+  STOCK_DB_USER: stockuser
+  STOCK_DB_PASSWORD: stockpassword
+  STOCK_DB_NAME: stockdata
+
+services:
+  # Service to initialize the database
+  airflow-init:
+    image: apache/airflow:2.8.1
+    container_name: airflow_init
+    environment:
+      <<: *common-environment
+    entrypoint: /bin/bash
+    command: -c "airflow db init"
+    depends_on:
+      - postgres-airflow
+    networks:
+      - airflow_network
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.8.1
+    container_name: airflow_scheduler
+    environment:
+      <<: *common-environment
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./logs:/opt/airflow/logs
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow_network
+
+  # Airflow Webserver
+  airflow-webserver:
+    image: apache/airflow:2.8.1
+    container_name: airflow_webserver
+    environment:
+      <<: *common-environment
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      - ./logs:/opt/airflow/logs
+    command: webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow_network
+
+  # PostgreSQL for Airflow Backend
+  postgres-airflow:
+    image: postgres:13
+    container_name: postgres_airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    networks:
+      - airflow_network
+
+  # PostgreSQL for Storing Stock Data
+  postgres-stock-data:
+    image: postgres:13
+    container_name: postgres_stock_data
+    environment:
+      POSTGRES_USER: stockuser
+      POSTGRES_PASSWORD: stockpassword
+      POSTGRES_DB: stockdata
+    ports:
+      - "5433:5432"
+    volumes:
+      - stock-db-data:/var/lib/postgresql/data
+    networks:
+      - airflow_network
+
+volumes:
+  airflow-db-data:
+  stock-db-data:
+
+networks:
+  airflow_network:
+    driver: bridge
